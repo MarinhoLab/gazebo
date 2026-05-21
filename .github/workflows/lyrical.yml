@@ -1,5 +1,5 @@
 #
-name: Jazzy image to ghcr.io
+name: Lyrical image to ghcr.io
 
 on:
   push:
@@ -11,8 +11,8 @@ env:
   IMAGE_NAME: marinholab/gazebo
   BUILDX_NO_DEFAULT_ATTESTATIONS: 1 # https://github.com/orgs/community/discussions/45969
   DOCKERFILE_CONTEXT: "./"
-  DOCKERFILE_NAME: "jazzy/Dockerfile"
-  DOCKERFILE_TAG: "jazzy"
+  DOCKERFILE_NAME: "lyrical/Dockerfile"
+  DOCKERFILE_TAG: "lyrical"
 
 jobs:
   build-and-push-image:
