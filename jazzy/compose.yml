@@ -1,0 +1,12 @@
+services:
+  gazebo:
+    image: ghcr.io/marinholab/gazebo:jazzy
+    stop_signal: SIGINT
+    environment:
+      - DISPLAY
+    privileged: true # Needed for some gpu configurations.
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix # x server related
+      - ~/.Xauthority:/root/.Xauthority # x server related
+    command: /bin/bash -c "
+      gz sim"
