@@ -380,6 +380,11 @@ docker run --rm -v "$WORK":/tmp/wt ghcr.io/marinholab/gazebo:jazzy bash -c '
 # the still image is now at "$WORK/snapshot.png"
 ```
 
+The resulting snapshot (the same scene as the full test — background + floor +
+the red target box) is bundled here as `assets/snapshot_example.png`:
+
+![One-frame headless camera snapshot](assets/snapshot_example.png)
+
 Notes:
 - `-n 1` takes exactly one message, so this is a true snapshot rather than a
   video stream.
@@ -405,5 +410,8 @@ repository. Everything needed to run the test lives in this skill directory:
   with the `Sensors` (ogre2) system plugin.
 - **`assets/decode_png.py`** — stdlib-only helper that decodes a `gz topic -e`
   frame into a PNG and prints rendering diagnostics.
+- **`assets/snapshot_example.png`** — the one-frame camera snapshot produced by
+  the example above (1280×720 RGB), shown inline for reference.
 
-Both are also reproduced inline in the replication steps above for reference.
+The world and helper are also reproduced inline in the replication steps above
+for reference.
