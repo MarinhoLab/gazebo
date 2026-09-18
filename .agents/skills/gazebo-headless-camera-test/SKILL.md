@@ -1,6 +1,6 @@
 ---
 name: gazebo-headless-camera-test
-description: This skill should be used when the user asks to "test Gazebo Harmonic --headless-rendering in a container", "verify camera image capture in headless Gazebo", "prove a Gazebo camera publishes gz.msgs.Image without a GPU/X server", or to "replicate the headless camera rendering test". It reproduces a verified end-to-end test that launches `gz sim --headless-rendering` inside the `ghcr.io/marinholab/gazebo:jazzy` container and confirms a camera sensor produces real (non-flat) image frames.
+description: This skill should be used when the user asks to "test Gazebo Harmonic --headless-rendering in a container", "verify camera image capture in headless Gazebo", "prove a Gazebo camera publishes gz.msgs.Image without a GPU/X server", "take a camera snapshot from a headless Gazebo camera", or to "replicate the headless camera rendering test". It reproduces a verified end-to-end test that launches `gz sim --headless-rendering` inside the `ghcr.io/marinholab/gazebo:jazzy` container and confirms a camera sensor produces real (non-flat) image frames, and includes a ready-to-run one-frame camera snapshot example.
 ---
 
 # Gazebo Harmonic Headless Camera Rendering Test
@@ -355,6 +355,38 @@ Harmonic world (e.g. inside a container built from this image):
 5. For a recorded video file headless, there is no native headless video encoder;
    pipe the bridged `sensor_msgs/Image` stream into `ffmpeg` (or a small node). The
    built-in **Video Recorder** is a GUI plugin only (needs the GUI, e.g. under Xvfb).
+
+## Example: one-frame camera snapshot
+
+Capture a single still image (a "snapshot") from the headless camera and save it
+as a PNG — no GUI, no GPU, no X server. This is the minimal, copy-paste workflow:
+start the sim headless, grab exactly one frame with `gz topic -e -n 1`, decode it
+with the bundled stdlib-only helper, and exit.
+
+```bash
+SKILL_DIR=<path to this skill dir>   # .../gazebo-headless-camera-test
+WORK=/tmp/gazebo_snapshot
+mkdir -p "$WORK"
+cp "$SKILL_DIR/assets/test_world.sdf" "$SKILL_DIR/assets/decode_png.py" "$WORK/"
+
+docker run --rm -v "$WORK":/tmp/wt ghcr.io/marinholab/gazebo:jazzy bash -c '
+  gz sim -s -r --headless-rendering /tmp/wt/test_world.sdf > /tmp/wt/sim.log 2>&1 &
+  P=$!
+  sleep 15                       # allow software EGL + sensor to initialize
+  gz topic -e -n 1 -t /camera > /tmp/wt/snapshot.txt 2>/dev/null
+  python3 /tmp/wt/decode_png.py /tmp/wt/snapshot.txt /tmp/wt/snapshot.png
+  kill $P 2>/dev/null; wait $P 2>/dev/null
+'
+# the still image is now at "$WORK/snapshot.png"
+```
+
+Notes:
+- `-n 1` takes exactly one message, so this is a true snapshot rather than a
+  video stream.
+- `sleep 15` is only needed because rendering is software (llvmpipe) and the
+  first frames take a while to spin up; drop it if a GPU is available.
+- The output PNG shows the same scene as the full test (background + floor +
+  the red target box), confirming the headless camera really sees the world.
 
 ## References (official Gazebo Harmonic)
 
