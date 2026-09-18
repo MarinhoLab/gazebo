@@ -177,9 +177,13 @@ diagnostics that prove the frame is a real rendered scene (dynamic luminance ran
 a red-target pixel count, and a written PNG). It uses only the Python standard
 library, so it runs inside the container with no `pip` install.
 
-> Key gotcha: `gz topic -e` prints binary image `data` as **octal-escaped** text
-> (e.g. `\313` = byte 0xD3). The helper must unescape octal to recover pixel bytes —
-> a naive byte count on the raw text will under-count and produce an empty/flat image.
+> Key gotcha: `gz topic -e` prints the binary image `data` field via protobuf
+> `TextFormat` -> `absl::CEscape`. Non-printable bytes are **octal-escaped**
+> (e.g. `\313` = byte 0xD3), but a few bytes get a **named** 2-char escape instead
+> (`\"`, `\'`, `\\`, `\t`, `\n`, `\r`). The helper must decode *both*; decoding
+> only the octal case leaves each named escape as two bytes and silently
+> mis-aligns the pixel stream. A naive byte count on the raw text also
+> under-counts and produces an empty/flat image.
 
 Reference copy (identical to bundled `assets/decode_png.py`; usage:
 `python3 decode_png.py <gz_topic_output.txt> <out.png>`):
@@ -188,21 +192,41 @@ Reference copy (identical to bundled `assets/decode_png.py`; usage:
 import re, sys, zlib, struct
 
 
+# Named 2-char C-escapes that protobuf/absl::CEscape emits alongside octal.
+_NAMED = {'n': 0x0A, 't': 0x09, 'r': 0x0D, '"': 0x22, "'": 0x27, '\\': 0x5C}
+
+
 def unescape(txt):
-    """Decode gz-topic octal-escaped binary (e.g. \\313 -> byte 0xD3)."""
+    """Decode gz-topic C-escaped binary.
+
+    `gz topic -e` renders `bytes` fields via protobuf TextFormat -> absl::CEscape
+    (absl/strings/escaping.cc). That emits:
+      * printable ASCII 0x20-0x7E -> literal, EXCEPT " ' \\ which become 2-char
+        escapes (\" \' \\\\);
+      * \\t \\n \\r -> 2-char named escapes;
+      * every other byte -> 3-digit octal \\NNN.
+    Decoding only the octal case (the old behaviour) leaves each named escape as
+    two bytes and silently mis-aligns the pixel stream, so we handle both.
+    """
     out = bytearray()
     i = 0
     while i < len(txt):
         c = txt[i]
-        if c == "\\" and i + 1 < len(txt) and txt[i + 1] in "01234567":
-            j = i + 1
-            o = ""
-            while j < len(txt) and len(o) < 3 and txt[j] in "01234567":
-                o += txt[j]
-                j += 1
-            out.append(int(o, 8))
-            i = j
-            continue
+        if c == "\\" and i + 1 < len(txt):
+            n = txt[i + 1]
+            if n in _NAMED:
+                out.append(_NAMED[n])
+                i += 2
+                continue
+            if n in "01234567":
+                j = i + 1
+                o = ""
+                while j < len(txt) and len(o) < 3 and txt[j] in "01234567":
+                    o += txt[j]
+                    j += 1
+                out.append(int(o, 8))
+                i = j
+                continue
         out.append(ord(c))
         i += 1
     return bytes(out)
@@ -325,7 +349,9 @@ done
 - `gz topic -l | grep cam` → `/camera`, `/camera_info`
 - `gz topic -i -t /camera` → `gz.msgs.Image`
 - `decode_png.py` on a 1280×720 frame:
-  - `decoded_len == 2764800 == 1280*720*3`
+  - `decoded_len == 2764800 == 1280*720*3` (exactly — a value a few bytes
+    *off* means the C-escaping in `gz topic -e` was decoded incompletely; see
+    the "Key gotcha" above)
   - `luminance min≈70 max≈179` (real depth; a flat buffer would be one value)
   - a PNG is written and shows background + floor horizon + the target box
 - Sustained rate ≈ `update_rate` fps with zero render errors in `sim.log`
