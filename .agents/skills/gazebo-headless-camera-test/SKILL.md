@@ -10,9 +10,21 @@ description: This skill should be used when the user asks to "test Gazebo Harmon
 Reproduce a verified test that proves Gazebo **Harmonic** (`gz sim`, gz-sim 8.x) renders a
 world and streams camera image frames using the official `--headless-rendering` flag,
 **without a GPU and without an X server** (software OGRE2/EGL). The test is self-contained:
-one small world file plus one stdlib-only Python helper. It was validated on
-`ghcr.io/marinholab/gazebo:jazzy` (ROS 2 Jazzy + Gazebo Harmonic) on both arm64 and
-would also run amd64 (the image is multi-arch).
+one small world file plus a helper that turns a captured `gz.msgs.Image` frame into a PNG
+and prints rendering diagnostics. Two helper variants are bundled:
+
+- **`decode_png.cpp`** — the primary helper. A C++ utility that talks to Gazebo directly
+  with the official `gz-transport` / `gz-msgs` libraries. In its default mode it
+  **subscribes to the live topic** (`Node::Subscribe<gz::msgs::Image>`) and receives real
+  `gz.msgs.Image` protos — no `gz topic -e` text scraping, no octal un-escaping. It can
+  also decode a captured `gz topic -e` dump (`--from-file`) as a drop-in for the Python
+  helper. Needs the Gazebo C++ dev headers (`libgz-msgs*-dev` + `libgz-transport*-dev`)
+  and is built in-container with the bundled `build.sh`.
+- **`decode_png.py`** — a stdlib-only fallback (no build step, no Gazebo C++ headers) that
+  decodes a captured `gz topic -e` dump. Use it when the C++ toolchain is unavailable.
+
+Both were validated on `ghcr.io/marinholab/gazebo:jazzy` (ROS 2 Jazzy + Gazebo Harmonic)
+on both arm64 and amd64 (the image is multi-arch).
 
 ### What the test proves
 - `gz sim -s -r --headless-rendering <world>.sdf` boots with no crash and no render errors.
@@ -36,6 +48,12 @@ Inside the container the following are expected (all present in the image):
 - Mesa EGL/GL libs: `libEGL.so`, `libGLESv2.so`
 - **No `/dev/dri`** (no GPU) → EGL falls back to software (llvmpipe) rendering.
   This is fine for the test; it is CPU-bound, so keep resolution/rate modest.
+- For the **C++ helper** (`decode_png.cpp`): `g++`, `pkg-config`, and the Gazebo C++
+  dev headers `libgz-msgs*-dev` + `libgz-transport*-dev` (Harmonic ships
+  `libgz-msgs10-dev` + `libgz-transport13-dev`). These come with the full
+  `gz-harmonic`/`ros-*-ros-gz` install and are present in the image. The message
+  C++ classes are prebuilt into `libgz-msgs*.so`, so **no `protoc` code generation is
+  needed** — you just `#include <gz/msgs/image.pb.h>` and link.
 
 Sanity-check the environment first:
 
@@ -256,14 +274,102 @@ write_png(out_png, w, h, data)
 print(f"wrote PNG -> {out_png}")
 ```
 
+### 2b. (Preferred) Build the C++ helper `decode_png.cpp`
+
+`decode_png.cpp` is the same utility written against the official Gazebo C++
+libraries, so the frame never leaves the transport layer as octal-escaped text.
+It uses:
+
+- `gz::transport::Node` (`#include <gz/transport/Node.hh>`) —
+  `node.Subscribe<gz::msgs::Image>(topic, cb)` delivers each camera frame as a
+  real `gz.msgs.Image` protobuf (width/height/step/pixel_format_type/data), so
+  there is **nothing to unescape**;
+- the `gz.msgs.Image` message — the C++ class is prebuilt inside `libgz-msgs*.so`
+  and its headers ship in `libgz-msgs*-dev`, so just
+  `#include <gz/msgs/image.pb.h>` — **no `protoc` code generation**;
+- the system `zlib` to emit an 8-bit RGB/RGBA PNG (no other external deps).
+
+The bundled `build.sh` auto-detects the versioned pkg-config modules
+(Harmonic: `gz-transport13` + `gz-msgs10`; Jetty: `gz-transport8` + `gz-msgs5`)
+and compiles the utility in one `g++` invocation.
+
+Key parts of `assets/decode_png.cpp` (the full file is bundled):
+
+```cpp
+#include <zlib.h>
+#include "gz/msgs/image.pb.h"
+#include "gz/transport/Node.hh"
+
+int main(int argc, char **argv) {
+    // args: -t TOPIC -n FRAMES -w WAIT_SECS -o OUT.png | --from-file DUMP
+    gz::transport::Node node;
+
+    std::atomic<int> received{0};
+    Frame last;                       // holds w/h/step/fmt/data of latest frame
+    std::mutex mtx;
+
+    // Native capture: gz.msgs.Image delivered straight from transport.
+    node.Subscribe<gz::msgs::Image>(topic, [&](const gz::msgs::Image &msg) {
+        std::lock_guard<std::mutex> lk(mtx);
+        last = {msg.width(), msg.height(), msg.step(),
+                (int)msg.pixel_format_type(),
+                std::vector<unsigned char>(msg.data().begin(), msg.data().end())};
+        if (++received >= count) stop = true;
+    });
+
+    // ...wait for `count` frames, then...
+    // Diagnostics identical to decode_png.py:
+    //   frame WxH step=S decoded_len=.. expected=..
+    //   luminance min=.. max=..  (dynamic range => real scene)
+    //   red px=.. (..%)
+    //   red box rows a..b of H => target in view
+    // ...and WritePng() emits an 8-bit PNG (IHDR/IDAT/IEND, zlib level 6).
+}
+```
+
+Two modes:
+
+- **Native (default):** `decode_png -t /camera -o frame.png` — subscribes with
+  `gz::transport` and decodes the first `gz.msgs.Image` it receives. Add
+  `-n 120` to capture N frames and print the measured fps.
+- **Drop-in:** `decode_png --from-file frame.txt -o frame.png` — decodes a
+  captured `gz topic -e` text dump (octal-unescaping included), exactly like
+  `decode_png.py`, for when you want to process a saved dump.
+
 ### 3. Run the sim and capture a frame (single container so transport shares a network)
 
-Mount a temp dir with the world + helper into the container. The world and helper
+Mount a temp dir with the world + helper(s) into the container. The world and helpers
 are bundled in this skill's `assets/` directory, so copy those — the skill runs
 without depending on any file outside the repository. Start the sim in the
 background, wait for the render engine + sensor to spin up, capture exactly one
 message, then kill the sim. (`SKILL_DIR` is the directory containing this
 `SKILL.md`.)
+
+**Option A — C++ helper (preferred, native `gz.msgs.Image` subscription):**
+
+```bash
+SKILL_DIR=<path to this skill dir>   # .../gazebo-headless-camera-test
+WORK=/tmp/gazebo_cam_test
+mkdir -p "$WORK"
+cp "$SKILL_DIR/assets/test_world.sdf" "$SKILL_DIR/assets/decode_png.cpp" \
+     "$SKILL_DIR/assets/build.sh" "$WORK/"
+
+docker run --rm -v "$WORK":/tmp/wt ghcr.io/marinholab/gazebo:jazzy bash -c '
+  cd /tmp/wt
+  chmod +x build.sh && ./build.sh decode_png     # compiles decode_png.cpp
+  gz sim -s -r --headless-rendering /tmp/wt/test_world.sdf > /tmp/wt/sim.log 2>&1 &
+  P=$!
+  sleep 15                       # allow software EGL + sensor to initialize
+  echo "== topics ==";  gz topic -l | grep -i cam
+  echo "== one frame (native subscription) =="; ./decode_png -t /camera -o /tmp/wt/frame.png
+  echo "== fps over ~4 s =="; ./decode_png -t /camera -n 120 -o /tmp/wt/frame.png | head -1
+  echo "== render errors: $(grep -ciE "error|fail|crash|abort|unable to create|EGL init" /tmp/wt/sim.log) =="
+  kill $P 2>/dev/null; wait $P 2>/dev/null
+'
+# copy the PNG out to view:  cp "$WORK/frame.png" ./headless_frame.png
+```
+
+**Option B — Python helper (stdlib-only, no build; decodes a `gz topic -e` dump):**
 
 ```bash
 SKILL_DIR=<path to this skill dir>   # .../gazebo-headless-camera-test
@@ -286,7 +392,17 @@ docker run --rm -v "$WORK":/tmp/wt ghcr.io/marinholab/gazebo:jazzy bash -c '
 
 ### 4. (Optional) Sustained frame-rate measurement
 
-To confirm the rate, capture for ~12 s and count frames:
+To confirm the rate, capture N frames and divide by the elapsed time.
+
+**C++ helper (prints the fps directly):**
+
+```bash
+# inside the container (after build.sh has compiled ./decode_png):
+./decode_png -t /camera -n 120 -o /tmp/wt/frame.png
+#   -> "captured 120 frames in 3.3 s (~36 fps)"
+```
+
+**Python helper (count `stamp {` occurrences):**
 
 ```bash
 docker run --rm -v "$WORK":/tmp/wt ghcr.io/marinholab/gazebo:jazzy bash -c '
@@ -314,8 +430,11 @@ for bg in 0.05 0.95; do
   #                       <background>$bg $bg $bg 1</background></scene>
   gz sim -s -r --headless-rendering "w_$bg.sdf" & P=$!
   sleep 12
-  gz topic -e -n 1 -t /camera > "msg_$bg.txt" 2>/dev/null
-  python3 decode_png.py "msg_$bg.txt" "png_$bg.png"   # compare luminance min/max
+  # C++ helper (native):
+  ./decode_png -t /camera -o "png_$bg.png"      # compare luminance min/max
+  # ...or Python helper (dump first):
+  # gz topic -e -n 1 -t /camera > "msg_$bg.txt" 2>/dev/null
+  # python3 decode_png.py "msg_$bg.txt" "png_$bg.png"
   kill $P 2>/dev/null; wait $P 2>/dev/null
 done
 ```
@@ -324,10 +443,15 @@ done
 
 - `gz topic -l | grep cam` → `/camera`, `/camera_info`
 - `gz topic -i -t /camera` → `gz.msgs.Image`
-- `decode_png.py` on a 1280×720 frame:
-  - `decoded_len == 2764800 == 1280*720*3`
+- `decode_png.cpp` (native) on a 1280×720 frame:
+  - `frame 1280x720 step=3840 decoded_len=2764800 expected=2764800`
   - `luminance min≈70 max≈179` (real depth; a flat buffer would be one value)
   - a PNG is written and shows background + floor horizon + the target box
+  - `./decode_png -t /camera -n 120` prints `captured N frames in T s (~fps)` ≈
+    the sensor `update_rate`
+- `decode_png.py` / `decode_png.cpp --from-file` on a `gz topic -e` dump of the
+  same frame report the identical diagnostics (byte length may be a few bytes
+  larger because the text dump carries the message envelope, not just pixels).
 - Sustained rate ≈ `update_rate` fps with zero render errors in `sim.log`
 
 ## Interpretation
@@ -363,6 +487,8 @@ Harmonic world (e.g. inside a container built from this image):
 - Sensors / camera SDF: `https://gazebosim.org/docs/harmonic/sensors`
 - Canonical camera example world: `gazebosim/gz-sim` `examples/worlds/camera_sensor.sdf` (gz-sim8).
 - `ros_gz_bridge` image pairing: `https://github.com/gazebosim/ros_gz/blob/ros2/ros_gz_bridge/README.md`
+- C++ transport API (`Node::Subscribe<gz::msgs::Image>`): `https://gazebosim.org/api/transport/13/classgz_1_1transport_1_1Node.html`
+  and `gz.msgs.Image`: `https://gazebosim.org/api/msgs/10/image_8proto.html`
 
 ## Bundled files
 
@@ -371,7 +497,15 @@ repository. Everything needed to run the test lives in this skill directory:
 
 - **`assets/test_world.sdf`** — the test world (light + floor + target box + camera)
   with the `Sensors` (ogre2) system plugin.
-- **`assets/decode_png.py`** — stdlib-only helper that decodes a `gz topic -e`
-  frame into a PNG and prints rendering diagnostics.
+- **`assets/decode_png.cpp`** — the primary C++ helper. Subscribes to a Gazebo
+  topic with `gz::transport` and decodes `gz.msgs.Image` frames into a PNG with
+  rendering diagnostics (native mode); or decodes a `gz topic -e` dump
+  (`--from-file`) as a drop-in for the Python helper.
+- **`assets/build.sh`** — one-shot build for `decode_png.cpp`; auto-detects the
+  versioned `gz-transportNN`/`gz-msgsMM` pkg-config modules (Harmonic 13/10,
+  Jetty 8/5, ...).
+- **`assets/decode_png.py`** — stdlib-only fallback helper (no build, no Gazebo
+  C++ headers) that decodes a `gz topic -e` frame into a PNG.
 
-Both are also reproduced inline in the replication steps above for reference.
+The C++ and Python helpers are reproduced inline in the replication steps above
+for reference.
