@@ -71,12 +71,43 @@ gzif --connect 127.0.0.1:9100 \
   A dynamic `sub` frame from the container can also drive the mirror.
 - `sink.py` is the **test harness / demo**, not production code. It has scripted
   pause/unpause checks against `/world/empty/*` baked in.
+- `AGENTS.md` in this directory records the negative results and the probes that prove
+  them — read it before spending time on a dead end.
 - Measured ~1,000 msg/s sustained mirroring of `/world/empty/clock` (33–34 B msgs).
   Separately, raw TCP over a published port measured p50 160 µs / p99 426 µs at
   ~6,240 round trips/s, so one connection comfortably carries a 500 Hz control loop.
   The 1,000 msg/s is the PoC's ceiling, not the transport's.
 - Verified against gz-transport **13** (gz-sim8/Harmonic on macOS). Untested against
   14/15.
+
+## Prior art: a better established tool for the same problem
+
+While developing this we found **RoboStar Gazebo Bridge**, a VS Code extension pair
+that solves exactly this problem and is strictly more complete than `gzif`:
+
+- [Gazebo Bridge (Host)](https://marketplace.visualstudio.com/items?itemName=RoboStar.gz-bridge-host)
+  — runs on the local machine (this side of the boundary)
+- [Gazebo Bridge (Remote)](https://marketplace.visualstudio.com/items?itemName=RoboStar.gz-bridge-remote)
+  — runs inside the Dev Container / WSL / Codespace
+
+It relays gz's UDP-multicast discovery **and** the dynamically negotiated TCP data
+connections across the container boundary — i.e. it solves the general discovery
+problem that `gzif` sidesteps with a manual `--sub` manifest — and additionally installs
+a `gz` PATH shim so `gz sim ...` launched inside the container executes natively on the
+host. Same core topology as `gzif`: the host side initiates, with a control channel that
+forwards itself on demand, so there is no fixed port to declare.
+
+Honest caveats, so "established" is not overread: it is self-described **early /
+pre-alpha**, and adoption is small (Marketplace lists ~15–20 installs at the time of
+writing). What is established is the *mechanism* — the core relay is proven on a real
+cross-machine deployment, and as a piece of engineering it is more complete than
+anything in this directory. **Try it before extending `gzif`.** If the VS Code
+dependency is a problem, the design notes in its README are worth reading regardless.
+
+For the wider survey of alternatives (Zenoh as the gz-transport backend, Tailscale /
+Husarnet overlays with unicast peer lists, DDS discovery servers, a bridged-network VM),
+see `AGENTS.md`. Zenoh is the architecturally right answer here — TCP-first, one
+published port — but on current packaging it needs a gz-transport source build.
 
 ## Licence
 
