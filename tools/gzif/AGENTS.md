@@ -110,6 +110,57 @@ shipped. Fix it and re-measure, rather than fixing it silently.
 LGPL-2.1+, matching this repository. gz-transport itself is **Apache-2.0**, not GPL —
 linking it imposes no copyleft obligation on `gzif`.
 
+## How this differs from RoboStar Gazebo Bridge
+
+**They relay gz's wire protocol; `gzif` terminates it and re-expresses it.** The relay
+passes gz's own bytes through — the UDP-multicast discovery frames, then the
+dynamically negotiated data endpoints it reads out of the discovery protobuf — so gz
+discovery completes end to end and neither process knows a boundary exists. `gzif`
+breaks the connection at both ends, speaks a new JSON/length-prefixed protocol across
+it, and substitutes a manual `--sub` manifest for discovery.
+
+The difference is probably structural: the host half of the bridge is a VS Code
+extension, i.e. Node.js, which cannot link `libgz-transport` — so moving gz traffic
+means reimplementing its protocol. `gzif` is a C++ binary that links the real library,
+gets gz's wire behaviour for free, and only has to move payloads. That single choice
+explains most of the table below.
+
+| | RoboStar Gazebo Bridge | `gzif` |
+|---|---|---|
+| Mechanism | protocol relay, protocol-aware at **discovery** | API gateway, zero **payload** deserialisation |
+| gz discovery | runs end to end | bypassed, manual `--sub` |
+| Services / `gz service -l` | should work unchanged | needs the `call`/`reply` path, types declared per topic |
+| Published ports | **none** — control channel self-forwards over VS Code's existing channel | one, `-p 9100:9100` |
+| Where `gz sim` runs | `gz` PATH shim runs it natively on the host | you start it yourself on the Mac |
+| Worlds / meshes | synced into a host cache | your problem |
+| Plugins | built natively, or fetched prebuilt via `package.xml` | **not addressed** |
+| Runs under | VS Code remote host alive | any process; headless, CI |
+| Coupled to | gz **wire format** — breaks silently on a format change | gz **API/ABI** — breaks loudly, rebuild per major |
+| gz backend | ZeroMQ-specific (multicast + negotiated TCP); nothing to relay under Zenoh | backend-agnostic via the `Node` API |
+| Licence | Apache-2.0 | LGPL-2.1 |
+
+Two rows matter more than the rest for `sas_robot_driver_gazebo`:
+
+- **Plugins.** A native macOS `gz sim` cannot load a container-built Linux `.so`, so a
+  plugin like `AbsolutePosePublisher` silently publishes nothing under `gzif` until
+  someone builds it for macOS. The bridge has a *Build Native Plugins* command for
+  exactly this. `gzif` has no answer.
+- **Resource paths.** Their resource sync covers the `Error Code 14` failure we hit with
+  `ur3e_world.sdf` and missing UR meshes. With `gzif` that is manual `GZ_SIM_RESOURCE_PATH`
+  wrangling.
+
+And one row favours `gzif`: the relay's design assumes gz-transport's ZeroMQ
+architecture, so gz-transport15 with a Zenoh backend would leave it nothing to forward,
+whereas you would just run a `zenohd` router — which is the direction the stack is
+moving. See negative result 3 above, and **Zenoh** in the list below.
+
+Everything in the table is from the two Marketplace pages
+([host](https://marketplace.visualstudio.com/items?itemName=RoboStar.gz-bridge-host),
+[remote](https://marketplace.visualstudio.com/items?itemName=RoboStar.gz-bridge-remote));
+the *why* behind the protocol-level choice and the claim that the relay wouldn't apply
+to a Zenoh backend are **inference, not documentation**. Not yet verified hands-on for a
+UR3e world, and status is pre-alpha with ~15–20 installs.
+
 ## Alternatives worth knowing before extending this
 
 - **Zenoh** (gz-transport15 + `zenohd`) — best long-term fit, needs the source build
@@ -123,5 +174,7 @@ linking it imposes no copyleft obligation on `gzif`.
   with an explicit peer list (`GZ_IP` = the 100.x address, `GZ_RELAY` at the peer).
 - **A VM with bridged networking** (colima/UTM) — cheapest way to sidestep the entire
   problem, at the cost of native rendering.
-- **RoboStar Gazebo Bridge** — a maintained VS Code extension pair that does this job
-  and more. See "Prior art" in `README.md`; try it before extending `gzif`.
+- **RoboStar Gazebo Bridge** — a VS Code extension pair that solves the same problem by
+  relaying gz's wire protocol instead of terminating it, and handles resource sync and
+  native plugin builds. See "How this differs from RoboStar Gazebo Bridge" above; try it
+  before extending `gzif`.
