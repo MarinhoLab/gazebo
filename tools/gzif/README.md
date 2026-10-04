@@ -78,12 +78,13 @@ gzif --connect 127.0.0.1:9100 \
   pause/unpause checks against `/world/empty/*` baked in.
 - `AGENTS.md` in this directory records the negative results and the probes that prove
   them — read it before spending time on a dead end.
-- Sustained mirroring of `/world/empty/clock` measured **~3,000 msg/s** over loopback
-  (33–35 B msgs) — the publisher's own rate, so the mirror is not the limiting hop. An
-  earlier "~1,000 msg/s" figure here was the Python `sink.py` harness bottlenecking on
-  byte-at-a-time header reads, not the bridge. Raw TCP over a published port measured
-  p50 160 µs / p99 426 µs at ~6,240 round trips/s, so one connection comfortably carries
-  a 500 Hz control loop.
+- Sustained mirroring of `/world/empty/clock` measured **5,000 msg/s** (35 B msgs) —
+  identical to a native gz-transport subscriber on the same topic, so the bridge is not
+  the limiting hop and the extra per-message type string costs nothing. Every earlier
+  throughput figure was a harness ceiling, not the bridge's: ~1,000 in `sink.py`
+  (byte-at-a-time header reads) and ~3,000 in a listener that ran `json.loads` per
+  message. Raw TCP over a published port measured p50 160 µs / p99 426 µs at
+  ~6,240 round trips/s, so one connection comfortably carries a 500 Hz control loop.
 - Verified against gz-transport **13** (gz-sim8/Harmonic on macOS). Untested against
   14/15.
 

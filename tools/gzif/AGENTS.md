@@ -41,7 +41,7 @@ Linux does.
 
 Zenoh is TCP-first with *optional* multicast scouting, so it is the architecturally
 correct answer for this boundary — measured 12,165 msg/s at 82 µs round trip through a
-`zenohd` router on the same one-port, host-is-the-client topology, roughly 4× this
+`zenohd` router on the same one-port, host-is-the-client topology, roughly 2.4× this
 tool's throughput. But on current packaging it is not obtainable:
 
 | Item | Result |
@@ -112,11 +112,18 @@ kept only as a fallback for frames that carry none. Verified on the wire: `--sub
 /world/empty/stats` alone emits `type=gz.msgs.WorldStatistics`, `--sub
 /world/empty/clock` emits `type=gz.msgs.Clock`.
 
-Re-measured afterwards rather than trusting the change to be free: ~3,000 msg/s before
-and after on the same build of gz-transport, so the extra string copy per message costs
-nothing measurable. Note the earlier "~1,000 msg/s" figure quoted alongside this wart
-was the `sink.py` harness byte-at-a-time header reads, not `gzif`; the bridge was always
-faster than its demo consumer.
+Re-measured afterwards rather than trusting the change to be free: both builds sustain
+5,000 msg/s on `/world/empty/clock`, which is exactly what a native gz-transport
+subscriber sees on the same topic, so the bridge is not the limiting hop and the extra
+string copy costs nothing measurable.
+
+**Throughput figures here have been wrong twice, both times measuring the harness.**
+1,000 msg/s was `sink.py`'s byte-at-a-time header reads; 3,000 msg/s was a listener that
+ran `json.loads` on every frame. The reliable pattern is to compare the bridge against a
+native `SubscribeRaw` tap on the same topic in the same window — if the two agree, the
+bridge is not what you are measuring. gz-transport itself pushed 2.8M msg/s in an
+unthrottled publisher test, so simulator topic rates will be the ceiling long before the
+bridge is.
 
 ## Licensing note
 
@@ -177,7 +184,7 @@ UR3e world, and status is pre-alpha with ~15–20 installs.
 ## Alternatives worth knowing before extending this
 
 - **Zenoh** (gz-transport15 + `zenohd`) — best long-term fit, needs the source build
-  described above. One port, TCP-first, ~4× throughput.
+  described above. One port, TCP-first, ~2.4× throughput.
 - **DDS unicast peers / Fast DDS discovery server** — the well-trodden fix when what
   must cross the boundary is ROS 2 ↔ ROS 2. Does nothing for gz-transport, which is a
   separate stack.
