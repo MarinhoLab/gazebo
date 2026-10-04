@@ -71,8 +71,10 @@ gzif --connect 127.0.0.1:9100 \
   A dynamic `sub` frame from the container can also drive the mirror.
 - `sink.py` is the **test harness / demo**, not production code. It has scripted
   pause/unpause checks against `/world/empty/*` baked in.
-- Measured ~1,000 msg/s mirroring with a ~145 us round trip at 76 B. That is the PoC's
-  ceiling, not the transport's.
+- Measured ~1,000 msg/s sustained mirroring of `/world/empty/clock` (33–34 B msgs).
+  Separately, raw TCP over a published port measured p50 160 µs / p99 426 µs at
+  ~6,240 round trips/s, so one connection comfortably carries a 500 Hz control loop.
+  The 1,000 msg/s is the PoC's ceiling, not the transport's.
 - Verified against gz-transport **13** (gz-sim8/Harmonic on macOS). Untested against
   14/15.
 
