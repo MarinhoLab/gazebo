@@ -60,23 +60,30 @@ make                     # or: make PKG=gz-transport15
 # container side: publishes 9100 and runs sink.py as its listener
 gzif --connect 127.0.0.1:9100 \
      --sub /world/empty/clock \
-     --sub /world/empty/stats:gz.msgs.WorldStatistics
+     --sub /world/empty/stats
+     # --sub /topic:gz.msgs.Type is also accepted; the type is only a fallback
+     # label, since MessageInfo::Type() supplies the real one per message.
 ```
 
 ## Known limitations
 
-- **Discovery is manual.** Because gz discovery is bypassed, `--sub` is a manifest of
-  what to forward. Topic *names* are discoverable (`gz topic -l` works from a host
-  shell with `GZ_IP=127.0.0.1`); topic *types* are not, hence the `topic:type` syntax.
-  A dynamic `sub` frame from the container can also drive the mirror.
+- **Topic selection is manual.** Because gz discovery is bypassed across the boundary,
+  `--sub` is a list of what to forward. Types are **not** needed: gz-transport puts the
+  message type in every frame header, so `MessageInfo::Type()` labels each forwarded
+  message with its real type (verified — `--sub /world/empty/stats` alone yields
+  `gz.msgs.WorldStatistics` on the wire). `topic:gz.msgs.Type` remains accepted, but
+  only as a fallback label for messages that arrive without one. A dynamic `sub` frame
+  from the container can also drive the mirror.
 - `sink.py` is the **test harness / demo**, not production code. It has scripted
   pause/unpause checks against `/world/empty/*` baked in.
 - `AGENTS.md` in this directory records the negative results and the probes that prove
   them — read it before spending time on a dead end.
-- Measured ~1,000 msg/s sustained mirroring of `/world/empty/clock` (33–34 B msgs).
-  Separately, raw TCP over a published port measured p50 160 µs / p99 426 µs at
-  ~6,240 round trips/s, so one connection comfortably carries a 500 Hz control loop.
-  The 1,000 msg/s is the PoC's ceiling, not the transport's.
+- Sustained mirroring of `/world/empty/clock` measured **~3,000 msg/s** over loopback
+  (33–35 B msgs) — the publisher's own rate, so the mirror is not the limiting hop. An
+  earlier "~1,000 msg/s" figure here was the Python `sink.py` harness bottlenecking on
+  byte-at-a-time header reads, not the bridge. Raw TCP over a published port measured
+  p50 160 µs / p99 426 µs at ~6,240 round trips/s, so one connection comfortably carries
+  a 500 Hz control loop.
 - Verified against gz-transport **13** (gz-sim8/Harmonic on macOS). Untested against
   14/15.
 

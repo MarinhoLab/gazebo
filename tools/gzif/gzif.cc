@@ -67,10 +67,13 @@ void sendFrame(const std::string &hdr, const char *p, size_t n) {
 }
 
 // gz's RawCallback is void(const char*, size_t, const MessageInfo&).
+// MessageInfo::Type() carries the real type even for a typeless SubscribeRaw,
+// so `fallback` only labels messages that arrive without one.
 gz::transport::RawCallback fwd(const std::string &topic,
-                                     const std::string &type) {
-  return [topic, type](const char *d, const size_t n,
-                       const gz::transport::MessageInfo &) {
+                                     const std::string &fallback = "") {
+  return [topic, fallback](const char *d, const size_t n,
+                       const gz::transport::MessageInfo &info) {
+    const std::string type = info.Type().empty() ? fallback : info.Type();
     sendFrame(R"({"op":"pub","topic":")" + topic + R"(","type":")" + type + R"("})",
               d, n);
   };
@@ -171,16 +174,17 @@ int main(int argc, char **argv) {
 
   std::thread(reader).detach();
   for (auto &spec : subs) {
-    // spec is "topic" or "topic:gz.msgs.Type"; the manifest declares types
-    // because gz-transport13 exposes no topic-type lookup on Node.
-    std::string t = spec, type = "gz.msgs.String";
-    if (spec.find('.') != std::string::npos) {
-      size_t c = spec.rfind(':');
+    // spec is "topic" or "topic:gz.msgs.Type". The type is optional and only a
+    // fallback label: MessageInfo::Type() supplies the real one per message.
+    std::string t = spec, type;
+    if (const size_t c = spec.rfind(':'); c != std::string::npos &&
+                                          spec.find('.', c) != std::string::npos) {
       t = spec.substr(0, c);
       type = spec.substr(c + 1);
     }
     g_node.SubscribeRaw(t, fwd(t, type));
-    std::cerr << "gzif: subscribed gz " << t << " [" << type << "]\n";
+    std::cerr << "gzif: subscribed gz " << t
+              << (type.empty() ? "" : " [fallback " + type + "]") << "\n";
   }
   while (true) std::this_thread::sleep_for(std::chrono::seconds(1));
 }

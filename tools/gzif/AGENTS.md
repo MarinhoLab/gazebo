@@ -41,7 +41,7 @@ Linux does.
 
 Zenoh is TCP-first with *optional* multicast scouting, so it is the architecturally
 correct answer for this boundary — measured 12,165 msg/s at 82 µs round trip through a
-`zenohd` router on the same one-port, host-is-the-client topology, roughly 14× this
+`zenohd` router on the same one-port, host-is-the-client topology, roughly 4× this
 tool's throughput. But on current packaging it is not obtainable:
 
 | Item | Result |
@@ -90,20 +90,33 @@ pause/unpause over the wire.
   succeeded — read `paused` from `/world/*/stats` before concluding otherwise.
 - `gz service` on `/world/*/control` needs `--reptype gz.msgs.Boolean`. With the wrong
   type it times out, which looks exactly like a network failure.
-- **Topic names are discoverable; topic types are not**, for a non-`gz` process.
-  `gz topic -l` works (with `GZ_IP` set); `gz topic -i -t <topic>` does not. Hence
-  `gzif`'s explicit `topic:type` manifest.
+- **Topic types are discoverable, and introspection needs the publisher to be
+  reachable.** `gz topic -i -t <topic>` prints the message type and
+  `gz service --info --service <svc>` prints request/response types — verified on
+  gz-transport 13 (macOS host, jazzy image) and 15 (lyrical image), and inside the
+  frame header via `MessageInfo::Type()`. An earlier note here claimed types were not
+  discoverable; that was a bad observation, and it is why the `topic:type` syntax
+  exists at all. Caveat: introspection is itself a data connection to the publisher's
+  *advertised* address, so it works within one network namespace but fails across the
+  container boundary exactly like message delivery does (negative result 1).
 - `gz sim -v1` prints `Error` lines from `sensors_system.cc` / `heightmap_sdf_utils.cc`
   on any world. Noise, not failure.
 - `timeout` is not available in Ubuntu 26.04 based images.
 
-## Known wart in `gzif` itself
+## Fixed: `--sub` types are now a fallback, not a requirement
 
-For a typeless `--sub /topic`, the CLI path labels forwarded messages with the declared
-default type instead of each message's real type, because the CLI cannot express a
-per-topic type. `MessageInfo::Type()` is available in the callback, so this is a
-one-line fix — deliberately left alone so the published numbers describe the code as
-shipped. Fix it and re-measure, rather than fixing it silently.
+An earlier version labelled every forwarded message with the type declared on the
+command line, so a bare `--sub /world/empty/stats` arrived tagged `gz.msgs.String`.
+`MessageInfo::Type()` now supplies the real type per message, with the declared type
+kept only as a fallback for frames that carry none. Verified on the wire: `--sub
+/world/empty/stats` alone emits `type=gz.msgs.WorldStatistics`, `--sub
+/world/empty/clock` emits `type=gz.msgs.Clock`.
+
+Re-measured afterwards rather than trusting the change to be free: ~3,000 msg/s before
+and after on the same build of gz-transport, so the extra string copy per message costs
+nothing measurable. Note the earlier "~1,000 msg/s" figure quoted alongside this wart
+was the `sink.py` harness byte-at-a-time header reads, not `gzif`; the bridge was always
+faster than its demo consumer.
 
 ## Licensing note
 
@@ -164,7 +177,7 @@ UR3e world, and status is pre-alpha with ~15–20 installs.
 ## Alternatives worth knowing before extending this
 
 - **Zenoh** (gz-transport15 + `zenohd`) — best long-term fit, needs the source build
-  described above. One port, TCP-first, ~14× throughput.
+  described above. One port, TCP-first, ~4× throughput.
 - **DDS unicast peers / Fast DDS discovery server** — the well-trodden fix when what
   must cross the boundary is ROS 2 ↔ ROS 2. Does nothing for gz-transport, which is a
   separate stack.
