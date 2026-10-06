@@ -24,3 +24,8 @@ curl -OL https://raw.githubusercontent.com/MarinhoLab/gazebo/refs/heads/main/jaz
 xhost +local:root
 docker compose up
 ```
+
+## Tools
+
+- [`tools/gzif`](tools/gzif/README.md) — bridge gz-transport between a native macOS
+  `gz sim` and a Linux container over a single TCP port. Draft/PoC.
